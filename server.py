@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import csv
 import os
 import uuid
+import json
 
 ACTIVE_CALL_URL = None
 
@@ -24,6 +25,38 @@ def start_call():
     print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 
     return jsonify({"url": room_url})
+
+@app.route('/doctor_login', methods=['POST'])
+def doctor_login():
+    """
+    Checks username and password against the server-side access list.
+    """
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    
+    # 1. Load the access list from the server's file system
+    access_file = 'doctors_access_list.json'
+    
+    if not os.path.exists(access_file):
+        print("Server Error: Access list file missing.")
+        return jsonify({"success": False, "message": "System Error: Contact Admin"}), 500
+
+    try:
+        with open(access_file, 'r') as f:
+            credentials = json.load(f)
+            
+        # 2. Check credentials
+        if username in credentials and credentials[username] == password:
+            print(f"LOGIN SUCCESS: {username}")
+            return jsonify({"success": True, "message": "Login Successful"})
+        else:
+            print(f"LOGIN FAILED: {username}")
+            return jsonify({"success": False, "message": "Invalid Username or Password"}), 401
+            
+    except Exception as e:
+        print(f"Login Error: {e}")
+        return jsonify({"success": False, "message": "Server Error"}), 500
 
 @app.route('/get_active_call', methods=['GET'])
 def get_active_call():
@@ -91,7 +124,6 @@ def get_notes():
         print(f"Server error: {e}")
         return jsonify({"error": "Could not read notes"}), 500
 
-# --- AND ADD THIS NEW FUNCTION ---
 @app.route('/update_notes', methods=['POST'])
 def update_notes():
     """
