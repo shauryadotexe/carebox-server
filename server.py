@@ -2,149 +2,122 @@ from flask import Flask, request, jsonify
 import csv
 import os
 import uuid
-import json
+import json  # <--- Added json import
 
-ACTIVE_CALL_URL = None
-
+# --- GLOBAL VARIABLES ---
+ACTIVE_CALL = None
 DATA_FILE = 'patient_data.csv'
+CREDENTIALS_FILE = 'doctors_access_list.json' # <--- The file we just made
 
 app = Flask(__name__)
 
-@app.route('/start_call', methods=['GET'])
-def start_call():
-    global ACTIVE_CALL_URL
-
-    room_id = "CareBox-Call-" + str(uuid.uuid4())[:8]
-    room_url = f"https://meet.jit.si/{room_id}"
-
-    ACTIVE_CALL_URL = room_url
-
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-    print(f"DOCTOR: A patient is calling. Join this room:")
-    print(f"{room_url}")
-    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-
-    return jsonify({"url": room_url})
-
+# --- 1. DOCTOR LOGIN ENDPOINT (NEW) ---
 @app.route('/doctor_login', methods=['POST'])
 def doctor_login():
     """
-    Checks username and password against the server-side access list.
+    Reads the secure JSON file and verifies credentials.
     """
+    # 1. Get data from the App
     data = request.json
     username = data.get('username')
     password = data.get('password')
     
-    # 1. Load the access list from the server's file system
-    access_file = 'doctors_access_list.json'
-    
-    if not os.path.exists(access_file):
-        print("Server Error: Access list file missing.")
-        return jsonify({"success": False, "message": "System Error: Contact Admin"}), 500
+    # 2. Check if the "Database" file exists
+    if not os.path.exists(CREDENTIALS_FILE):
+        return jsonify({"success": False, "message": "Server Error: Credentials file missing"}), 500
 
     try:
-        with open(access_file, 'r') as f:
-            credentials = json.load(f)
+        # 3. Open the file and check the name/password
+        with open(CREDENTIALS_FILE, 'r') as f:
+            valid_users = json.load(f)
             
-        # 2. Check credentials
-        if username in credentials and credentials[username] == password:
+        if username in valid_users and valid_users[username] == password:
             print(f"LOGIN SUCCESS: {username}")
-            return jsonify({"success": True, "message": "Login Successful"})
+            return jsonify({"success": True, "message": "Access Granted"})
         else:
             print(f"LOGIN FAILED: {username}")
-            return jsonify({"success": False, "message": "Invalid Username or Password"}), 401
+            return jsonify({"success": False, "message": "Invalid Credentials"}), 401
             
     except Exception as e:
         print(f"Login Error: {e}")
-        return jsonify({"success": False, "message": "Server Error"}), 500
+        return jsonify({"success": False, "message": "Internal Server Error"}), 500
+
+# --- 2. CALL HANDLING ENDPOINTS (Existing) ---
+@app.route('/start_call', methods=['GET'])
+def start_call():
+    global ACTIVE_CALL
+    patient_name = request.args.get('patient_name')
+    
+    room_id = "CareBox-Call-" + str(uuid.uuid4())[:8]
+    room_url = f"https://meet.jit.si/{room_id}"
+
+    ACTIVE_CALL = {
+        "url": room_url,
+        "patient_name": patient_name
+    }
+    return jsonify({"url": room_url})
 
 @app.route('/get_active_call', methods=['GET'])
 def get_active_call():
-    global ACTIVE_CALL_URL
-    
-    if ACTIVE_CALL_URL:
-        url_to_send = ACTIVE_CALL_URL
-        
-        ACTIVE_CALL_URL = None 
-        
-        return jsonify({"url": url_to_send})
+    global ACTIVE_CALL
+    if ACTIVE_CALL:
+        data = ACTIVE_CALL
+        ACTIVE_CALL = None 
+        return jsonify(data)
     else:
-        return jsonify({"url": None})
+        return jsonify(None)
 
+# --- 3. DATA & NOTES ENDPOINTS (Existing) ---
 @app.route('/submit_patient', methods=['POST'])
 def handle_patient_submission():
-    
     data = request.json
-    
-    print(f"--- SERVER RECEIVED DATA ---")
-    print(f"Name: {data.get('name')}")
-    print(f"Age:  {data.get('age')}")
-    print(f"Gender:  {data.get('sex')}") 
-    print("----------------------------")
-    
     file_exists = os.path.isfile(DATA_FILE)
-    
     try:
         with open(DATA_FILE, mode='a', newline='') as file:
             fieldnames = ['name', 'age', 'sex']
             writer = csv.DictWriter(file, fieldnames=fieldnames)
-            
-            if not file_exists:
-                writer.writeheader()
-            
+            if not file_exists: writer.writeheader()
             writer.writerow(data)
-            
-        print("...Data saved to patient_data.csv")
-        return jsonify({"status": "success", "message": "Data received and saved!"})
-    
+        return jsonify({"status": "success"})
     except Exception as e:
-        print(f"!!! SERVER ERROR: Could not save data. {e}")
-        return jsonify({"status": "error", "message": "Server failed to save data"}), 500
-    
+        return jsonify({"status": "error"}), 500
+
+@app.route('/get_patient', methods=['GET'])
+def get_patient():
+    name_to_find = request.args.get('name')
+    if not name_to_find: return jsonify({"error": "No name provided"}), 400
+    try:
+        with open(DATA_FILE, mode='r') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                if row['name'].lower() == name_to_find.lower():
+                    return jsonify(row)
+        return jsonify({"error": "Not found"}), 404
+    except:
+        return jsonify({"error": "Server error"}), 500
+
 @app.route('/get_notes', methods=['GET'])
 def get_notes():
-    """
-    Gets the notes for a specific patient.
-    """
     patient_name = request.args.get('name')
-    if not patient_name:
-        return jsonify({"error": "A 'name' parameter is required."}), 400
-
+    # Ensure notes folder exists
+    if not os.path.exists("patient_notes"): os.makedirs("patient_notes")
+    
     filepath = os.path.join("patient_notes", f"{patient_name}.txt")
-
-    try:
-        if os.path.exists(filepath):
-            with open(filepath, 'r') as f:
-                notes = f.read()
-            return jsonify({"notes": notes})
-        else:
-            # It's a new patient, return blank notes
-            return jsonify({"notes": ""})
-    except Exception as e:
-        print(f"Server error: {e}")
-        return jsonify({"error": "Could not read notes"}), 500
+    if os.path.exists(filepath):
+        with open(filepath, 'r') as f: return jsonify({"notes": f.read()})
+    return jsonify({"notes": ""})
 
 @app.route('/update_notes', methods=['POST'])
 def update_notes():
-    """
-    Saves new notes for a specific patient.
-    """
     data = request.json
     patient_name = data.get('name')
     notes = data.get('notes')
-
-    if not patient_name or notes is None:
-        return jsonify({"error": "Name and notes are required."}), 400
-
+    
+    if not os.path.exists("patient_notes"): os.makedirs("patient_notes")
+    
     filepath = os.path.join("patient_notes", f"{patient_name}.txt")
-
-    try:
-        with open(filepath, 'w') as f:
-            f.write(notes)
-        return jsonify({"status": "success", "message": "Notes saved."})
-    except Exception as e:
-        print(f"Server error: {e}")
-        return jsonify({"error": "Could not save notes"}), 500
+    with open(filepath, 'w') as f: f.write(notes)
+    return jsonify({"status": "success"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+    app.run(host='0.0.0.0', debug=True, port=5001)
