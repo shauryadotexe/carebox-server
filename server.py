@@ -11,6 +11,37 @@ CREDENTIALS_FILE = 'doctors_access_list.json' # <--- The file we just made
 
 app = Flask(__name__)
 
+CHAT_HISTORY = {}
+
+# ... (existing routes) ...
+
+@app.route('/send_message', methods=['POST'])
+def send_message():
+    data = request.json
+    room_id = data.get('room_id') # Use patient_name or a unique call ID
+    sender = data.get('sender')
+    message = data.get('message')
+    
+    if not room_id or not sender or not message:
+        return jsonify({"error": "Missing data"}), 400
+        
+    if room_id not in CHAT_HISTORY:
+        CHAT_HISTORY[room_id] = []
+        
+    CHAT_HISTORY[room_id].append({'sender': sender, 'text': message})
+    return jsonify({"status": "success"})
+
+@app.route('/get_messages', methods=['GET'])
+def get_messages():
+    room_id = request.args.get('room_id')
+    
+    if not room_id:
+        return jsonify({"error": "Missing room_id"}), 400
+        
+    # Return list of messages, default to empty list if none exist
+    messages = CHAT_HISTORY.get(room_id, [])
+    return jsonify({"messages": messages})
+
 # --- 1. DOCTOR LOGIN ENDPOINT (NEW) ---
 @app.route('/doctor_login', methods=['POST'])
 def doctor_login():
