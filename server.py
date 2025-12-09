@@ -1,64 +1,34 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import csv
 import os
 import uuid
-import json  # <--- Added json import
+import json
+from datetime import datetime
 
 # --- GLOBAL VARIABLES ---
 ACTIVE_CALL = None
 DATA_FILE = 'patient_data.csv'
-CREDENTIALS_FILE = 'doctors_access_list.json' # <--- The file we just made
+CREDENTIALS_FILE = 'doctors_access_list.json'
 
 app = Flask(__name__)
 
 CHAT_HISTORY = {}
 
-# ... (existing routes) ...
-
-@app.route('/send_message', methods=['POST'])
-def send_message():
-    data = request.json
-    room_id = data.get('room_id') # Use patient_name or a unique call ID
-    sender = data.get('sender')
-    message = data.get('message')
-    
-    if not room_id or not sender or not message:
-        return jsonify({"error": "Missing data"}), 400
-        
-    if room_id not in CHAT_HISTORY:
-        CHAT_HISTORY[room_id] = []
-        
-    CHAT_HISTORY[room_id].append({'sender': sender, 'text': message})
-    return jsonify({"status": "success"})
-
-@app.route('/get_messages', methods=['GET'])
-def get_messages():
-    room_id = request.args.get('room_id')
-    
-    if not room_id:
-        return jsonify({"error": "Missing room_id"}), 400
-        
-    # Return list of messages, default to empty list if none exist
-    messages = CHAT_HISTORY.get(room_id, [])
-    return jsonify({"messages": messages})
-
-# --- 1. DOCTOR LOGIN ENDPOINT (NEW) ---
+# --- 1. DOCTOR LOGIN ---
 @app.route('/doctor_login', methods=['POST'])
 def doctor_login():
-    """
-    Reads the secure JSON file and verifies credentials.
-    """
-    # 1. Get data from the App
     data = request.json
     username = data.get('username')
     password = data.get('password')
     
-    # 2. Check if the "Database" file exists
+    # Ensure credentials file exists
     if not os.path.exists(CREDENTIALS_FILE):
-        return jsonify({"success": False, "message": "Server Error: Credentials file missing"}), 500
-
+        # Create a default one if missing
+        default_creds = {"admin": "admin"}
+        with open(CREDENTIALS_FILE, 'w') as f:
+            json.dump(default_creds, f)
+            
     try:
-        # 3. Open the file and check the name/password
         with open(CREDENTIALS_FILE, 'r') as f:
             valid_users = json.load(f)
             
@@ -73,7 +43,7 @@ def doctor_login():
         print(f"Login Error: {e}")
         return jsonify({"success": False, "message": "Internal Server Error"}), 500
 
-# --- 2. CALL HANDLING ENDPOINTS (Existing) ---
+# --- 2. CALL HANDLING ---
 @app.route('/start_call', methods=['GET'])
 def start_call():
     global ACTIVE_CALL
@@ -98,25 +68,38 @@ def get_active_call():
     else:
         return jsonify(None)
 
-# --- 3. DATA & NOTES ENDPOINTS (Existing) ---
+# --- 3. PATIENT DATA & LOGGING ---
 @app.route('/submit_patient', methods=['POST'])
 def handle_patient_submission():
     data = request.json
+    
+    # Add Timestamp
+    data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     file_exists = os.path.isfile(DATA_FILE)
     try:
         with open(DATA_FILE, mode='a', newline='') as file:
-            fieldnames = ['name', 'age', 'sex']
+            fieldnames = ['name', 'age', 'sex', 'timestamp']
             writer = csv.DictWriter(file, fieldnames=fieldnames)
-            if not file_exists: writer.writeheader()
+            
+            # Write header if file is new
+            if not file_exists: 
+                writer.writeheader()
+            
             writer.writerow(data)
         return jsonify({"status": "success"})
     except Exception as e:
+        print(f"Error saving patient: {e}")
         return jsonify({"status": "error"}), 500
 
 @app.route('/get_patient', methods=['GET'])
 def get_patient():
     name_to_find = request.args.get('name')
     if not name_to_find: return jsonify({"error": "No name provided"}), 400
+    
+    if not os.path.exists(DATA_FILE):
+        return jsonify({"error": "No database found"}), 404
+        
     try:
         with open(DATA_FILE, mode='r') as file:
             reader = csv.DictReader(file)
@@ -124,15 +107,107 @@ def get_patient():
                 if row['name'].lower() == name_to_find.lower():
                     return jsonify(row)
         return jsonify({"error": "Not found"}), 404
-    except:
-        return jsonify({"error": "Server error"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- NEW: VIEW ALL LOGS IN BROWSER ---
+@app.route('/view_logs', methods=['GET'])
+def view_logs():
+    """
+    Returns a simple HTML page to view the CSV data in the browser.
+    Accessible via: https://your-server-url.com/view_logs
+    """
+    if not os.path.exists(DATA_FILE):
+        return "<h3>No logs available yet.</h3>"
+
+    rows = []
+    try:
+        with open(DATA_FILE, mode='r') as file:
+            reader = csv.DictReader(file)
+            rows = list(reader)
+    except Exception as e:
+        return f"Error reading log: {e}"
+
+    # Simple HTML Template
+    html = """
+    <html>
+    <head>
+        <title>CareBox Patient Logs</title>
+        <style>
+            body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f9; }
+            table { border-collapse: collapse; width: 100%; box-shadow: 0 0 20px rgba(0,0,0,0.1); background: white; }
+            th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ddd; }
+            th { background-color: #009688; color: white; }
+            tr:hover { background-color: #f1f1f1; }
+            h1 { color: #333; }
+        </style>
+    </head>
+    <body>
+        <h1>Patient Login History</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Name</th>
+                    <th>Age</th>
+                    <th>Gender</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in rows %}
+                <tr>
+                    <td>{{ row.get('timestamp', 'N/A') }}</td>
+                    <td>{{ row.get('name') }}</td>
+                    <td>{{ row.get('age') }}</td>
+                    <td>{{ row.get('sex') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </body>
+    </html>
+    """
+    return render_template_string(html, rows=rows)
+
+# --- NEW: API TO GET ALL LOGS (JSON) ---
+@app.route('/get_all_patients', methods=['GET'])
+def get_all_patients():
+    if not os.path.exists(DATA_FILE):
+        return jsonify([])
+    try:
+        with open(DATA_FILE, mode='r') as file:
+            reader = csv.DictReader(file)
+            return jsonify(list(reader))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --- CHAT & NOTES (Existing) ---
+@app.route('/send_message', methods=['POST'])
+def send_message():
+    data = request.json
+    room_id = data.get('room_id')
+    sender = data.get('sender')
+    message = data.get('message')
+    
+    if not room_id or not sender or not message:
+        return jsonify({"error": "Missing data"}), 400
+        
+    if room_id not in CHAT_HISTORY:
+        CHAT_HISTORY[room_id] = []
+        
+    CHAT_HISTORY[room_id].append({'sender': sender, 'text': message})
+    return jsonify({"status": "success"})
+
+@app.route('/get_messages', methods=['GET'])
+def get_messages():
+    room_id = request.args.get('room_id')
+    messages = CHAT_HISTORY.get(room_id, [])
+    return jsonify({"messages": messages})
 
 @app.route('/get_notes', methods=['GET'])
 def get_notes():
     patient_name = request.args.get('name')
-    # Ensure notes folder exists
     if not os.path.exists("patient_notes"): os.makedirs("patient_notes")
-    
     filepath = os.path.join("patient_notes", f"{patient_name}.txt")
     if os.path.exists(filepath):
         with open(filepath, 'r') as f: return jsonify({"notes": f.read()})
@@ -143,12 +218,12 @@ def update_notes():
     data = request.json
     patient_name = data.get('name')
     notes = data.get('notes')
-    
     if not os.path.exists("patient_notes"): os.makedirs("patient_notes")
-    
     filepath = os.path.join("patient_notes", f"{patient_name}.txt")
     with open(filepath, 'w') as f: f.write(notes)
     return jsonify({"status": "success"})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', debug=True, port=5001)
+    # Use environment port for Render, default to 5001 locally
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host='0.0.0.0', debug=True, port=port)
