@@ -121,6 +121,23 @@ def update_notes():
         
     return jsonify({"status": "success"})
 
+@app.route('/clear_notes', methods=['POST'])
+def clear_notes():
+    data = request.json
+    name = data.get('name')
+    if not name: return jsonify({"error": "No name provided"}), 400
+    
+    if not os.path.exists("patient_notes"): 
+        return jsonify({"status": "no_files"})
+        
+    filepath = os.path.join("patient_notes", f"{name}.txt")
+    try:
+        # Open in 'w' mode and write nothing to clear it
+        with open(filepath, 'w') as f:
+            f.write("")
+        return jsonify({"status": "success"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 # Chat routes (omitted for brevity, keep existing ones) ...
 # View Logs route (keep existing one) ...
 
