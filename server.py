@@ -127,7 +127,7 @@ def clear_notes():
     name = data.get('name')
     if not name: return jsonify({"error": "No name provided"}), 400
     
-    if not os.path.exists("patient_notes"): 
+    if not os.path.exists("patient_notes"):
         return jsonify({"status": "no_files"})
         
     filepath = os.path.join("patient_notes", f"{name}.txt")
@@ -138,6 +138,59 @@ def clear_notes():
         return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# --- 5. SCAN DATA: patient -> server -> doctor ---
+@app.route('/submit_scan_data', methods=['POST'])
+def submit_scan_data():
+    data = request.json or {}
+    patient_name = data.get('patient_name', 'Unknown')
+    timestamp = data.get('timestamp') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    scans_dir = 'scans'
+    if not os.path.exists(scans_dir): os.makedirs(scans_dir)
+
+    filename = f"{patient_name.replace(' ','_')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+    try:
+        with open(os.path.join(scans_dir, filename), 'w') as f:
+            json.dump(data, f)
+        return jsonify({"status": "success", "file": filename})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route('/get_scans', methods=['GET'])
+def get_scans():
+    scans_dir = 'scans'
+    if not os.path.exists(scans_dir):
+        return jsonify([])
+    files = sorted(os.listdir(scans_dir), reverse=True)
+    out = []
+    for fn in files:
+        path = os.path.join(scans_dir, fn)
+        try:
+            with open(path, 'r') as f:
+                payload = json.load(f)
+            out.append({
+                'file': fn,
+                'patient_name': payload.get('patient_name'),
+                'timestamp': payload.get('timestamp', fn.split('_')[-1].replace('.json',''))
+            })
+        except:
+            continue
+    return jsonify(out)
+
+@app.route('/get_scan', methods=['GET'])
+def get_scan():
+    filename = request.args.get('file')
+    if not filename:
+        return jsonify({"error": "no file specified"}), 400
+    path = os.path.join('scans', filename)
+    if not os.path.exists(path):
+        return jsonify({"error": "not found"}), 404
+    try:
+        with open(path, 'r') as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 # Chat routes (omitted for brevity, keep existing ones) ...
 # View Logs route (keep existing one) ...
 
